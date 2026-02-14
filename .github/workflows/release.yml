@@ -1,0 +1,182 @@
+# Terraform Provider release workflow.
+# Modeled after: https://github.com/hashicorp/terraform-provider-scaffolding-framework/blob/main/.github/workflows/release.yml
+#
+# This GitHub action creates a release when a tag that matches the pattern
+# "v*" (e.g. v0.1.0) is created.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Releases need permissions to read and write the repository contents.
+# GitHub considers creating releases and uploading assets as writing contents.
+permissions:
+  contents: write
+
+jobs:
+  # Quality gate: lint + unit tests
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Lint and check mod tidy
+        run: make lint check-mod-tidy
+
+  test:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Run unit tests
+        run: make test-unit
+
+  # Quality gate: acceptance tests with real Directus
+  acceptance-test:
+    name: Acceptance Tests
+    runs-on: ubuntu-latest
+    needs: [lint, test]
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: directus
+          POSTGRES_USER: directus
+          POSTGRES_PASSWORD: directus
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      directus:
+        image: directus/directus:11.15
+        env:
+          DB_CLIENT: pg
+          DB_HOST: postgres
+          DB_PORT: '5432'
+          DB_DATABASE: directus
+          DB_USER: directus
+          DB_PASSWORD: directus
+          KEY: '255d861b-5ea1-5996-9aa3-922530ec40b1'
+          SECRET: '6116487b-cda1-52c2-b5b5-c8022c45e263'
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: admin123
+          PUBLIC_URL: 'http://localhost:8055'
+          RATE_LIMITER_ENABLED: 'false'
+          CACHE_ENABLED: 'false'
+        ports:
+          - 8055:8055
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Wait for Directus
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8055/server/health > /dev/null 2>&1 && echo "Directus is ready!" && break
+            [ "$i" -eq 60 ] && echo "::error::Directus failed to start" && exit 1
+            echo "  waiting... ($i/60)" && sleep 2
+          done
+
+      - name: Create Directus static token
+        id: token
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8055/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"admin@example.com","password":"admin123"}')
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.data.access_token')
+          [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ] && echo "::error::Failed to get access token: $RESPONSE" && exit 1
+
+          STATIC_TOKEN=$(openssl rand -hex 32)
+          curl -sf -o /dev/null -X PATCH http://localhost:8055/users/me \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"$STATIC_TOKEN\"}" || (echo "::error::Failed to set static token" && exit 1)
+
+          curl -sf -o /dev/null http://localhost:8055/server/ping \
+            -H "Authorization: Bearer $STATIC_TOKEN" || (echo "::error::Token verification failed" && exit 1)
+
+          echo "TOKEN=$STATIC_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "Static token created and verified"
+
+      - name: Run acceptance tests
+        env:
+          DIRECTUS_ENDPOINT: 'http://localhost:8055'
+          DIRECTUS_TOKEN: ${{ steps.token.outputs.TOKEN }}
+        run: make test-acceptance-run
+
+  # Release: build, sign, and publish via GoReleaser
+  goreleaser:
+    name: GoReleaser
+    runs-on: ubuntu-latest
+    needs: [acceptance-test]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # GoReleaser needs full history for changelog generation.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          install-only: true
+
+      - name: Import GPG key
+        id: import_gpg
+        if: ${{ env.GPG_PRIVATE_KEY != '' }}
+        uses: crazy-max/ghaction-import-gpg@v6
+        with:
+          gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
+          passphrase: ${{ secrets.PASSPHRASE }}
+        env:
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+
+      - name: Release
+        run: make release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GPG_FINGERPRINT: ${{ steps.import_gpg.outputs.fingerprint }}

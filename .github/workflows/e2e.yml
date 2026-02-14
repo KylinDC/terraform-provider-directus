@@ -1,0 +1,203 @@
+# E2E test workflow.
+# Manually triggered via workflow_dispatch. Runs basic and comprehensive
+# E2E test suites in parallel, each with its own Directus instance.
+name: E2E Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      directus_version:
+        description: 'Directus Docker image version'
+        required: false
+        default: '11.15'
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-basic:
+    name: E2E Basic
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: directus
+          POSTGRES_USER: directus
+          POSTGRES_PASSWORD: directus
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      directus:
+        image: directus/directus:${{ inputs.directus_version }}
+        env:
+          DB_CLIENT: pg
+          DB_HOST: postgres
+          DB_PORT: '5432'
+          DB_DATABASE: directus
+          DB_USER: directus
+          DB_PASSWORD: directus
+          KEY: '255d861b-5ea1-5996-9aa3-922530ec40b1'
+          SECRET: '6116487b-cda1-52c2-b5b5-c8022c45e263'
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: admin123
+          PUBLIC_URL: 'http://localhost:8055'
+          RATE_LIMITER_ENABLED: 'false'
+          CACHE_ENABLED: 'false'
+        ports:
+          - 8055:8055
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Wait for Directus
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8055/server/health > /dev/null 2>&1 && echo "Directus is ready!" && break
+            [ "$i" -eq 60 ] && echo "::error::Directus failed to start" && exit 1
+            echo "  waiting... ($i/60)" && sleep 2
+          done
+
+      - name: Create Directus static token
+        id: token
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8055/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"admin@example.com","password":"admin123"}')
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.data.access_token')
+          [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ] && echo "::error::Failed to get access token: $RESPONSE" && exit 1
+
+          STATIC_TOKEN=$(openssl rand -hex 32)
+          curl -sf -o /dev/null -X PATCH http://localhost:8055/users/me \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"$STATIC_TOKEN\"}" || (echo "::error::Failed to set static token" && exit 1)
+
+          curl -sf -o /dev/null http://localhost:8055/server/ping \
+            -H "Authorization: Bearer $STATIC_TOKEN" || (echo "::error::Token verification failed" && exit 1)
+
+          echo "TOKEN=$STATIC_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "Static token created and verified"
+
+      - name: Create .env file
+        run: |
+          echo "TEST_DIRECTUS_ENDPOINT=http://localhost:8055" > .env
+          echo "TEST_DIRECTUS_TOKEN=${{ steps.token.outputs.TOKEN }}" >> .env
+
+      - name: Build and install provider
+        run: make install
+
+      - name: Run basic E2E tests
+        run: make test-e2e-basic-run
+
+  e2e-comprehensive:
+    name: E2E Comprehensive
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: directus
+          POSTGRES_USER: directus
+          POSTGRES_PASSWORD: directus
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      directus:
+        image: directus/directus:${{ inputs.directus_version }}
+        env:
+          DB_CLIENT: pg
+          DB_HOST: postgres
+          DB_PORT: '5432'
+          DB_DATABASE: directus
+          DB_USER: directus
+          DB_PASSWORD: directus
+          KEY: '255d861b-5ea1-5996-9aa3-922530ec40b1'
+          SECRET: '6116487b-cda1-52c2-b5b5-c8022c45e263'
+          ADMIN_EMAIL: admin@example.com
+          ADMIN_PASSWORD: admin123
+          PUBLIC_URL: 'http://localhost:8055'
+          RATE_LIMITER_ENABLED: 'false'
+          CACHE_ENABLED: 'false'
+        ports:
+          - 8055:8055
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Download Go modules
+        run: go mod download
+
+      - name: Wait for Directus
+        run: |
+          for i in $(seq 1 60); do
+            curl -sf http://localhost:8055/server/health > /dev/null 2>&1 && echo "Directus is ready!" && break
+            [ "$i" -eq 60 ] && echo "::error::Directus failed to start" && exit 1
+            echo "  waiting... ($i/60)" && sleep 2
+          done
+
+      - name: Create Directus static token
+        id: token
+        run: |
+          RESPONSE=$(curl -s -X POST http://localhost:8055/auth/login \
+            -H "Content-Type: application/json" \
+            -d '{"email":"admin@example.com","password":"admin123"}')
+          ACCESS_TOKEN=$(echo "$RESPONSE" | jq -r '.data.access_token')
+          [ -z "$ACCESS_TOKEN" ] || [ "$ACCESS_TOKEN" = "null" ] && echo "::error::Failed to get access token: $RESPONSE" && exit 1
+
+          STATIC_TOKEN=$(openssl rand -hex 32)
+          curl -sf -o /dev/null -X PATCH http://localhost:8055/users/me \
+            -H "Authorization: Bearer $ACCESS_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"$STATIC_TOKEN\"}" || (echo "::error::Failed to set static token" && exit 1)
+
+          curl -sf -o /dev/null http://localhost:8055/server/ping \
+            -H "Authorization: Bearer $STATIC_TOKEN" || (echo "::error::Token verification failed" && exit 1)
+
+          echo "TOKEN=$STATIC_TOKEN" >> "$GITHUB_OUTPUT"
+          echo "Static token created and verified"
+
+      - name: Create .env file
+        run: |
+          echo "TEST_DIRECTUS_ENDPOINT=http://localhost:8055" > .env
+          echo "TEST_DIRECTUS_TOKEN=${{ steps.token.outputs.TOKEN }}" >> .env
+
+      - name: Build and install provider
+        run: make install
+
+      - name: Run comprehensive E2E tests
+        run: make test-e2e-comprehensive-run

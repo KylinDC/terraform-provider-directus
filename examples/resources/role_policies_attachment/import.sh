@@ -1,0 +1,1 @@
+terraform import directus_role_policies_attachment.example 12345678-1234-1234-1234-123456789abc

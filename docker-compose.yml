@@ -1,0 +1,83 @@
+services:
+  # PostgreSQL database for Directus
+  postgres:
+    image: postgres:16-alpine
+    container_name: directus-db
+    environment:
+      POSTGRES_USER: directus
+      POSTGRES_PASSWORD: directus
+      POSTGRES_DB: directus
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U directus -d directus"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  # Directus CMS
+  directus:
+    image: directus/directus:11.15
+    container_name: directus-cms
+    ports:
+      - "8055:8055"
+    volumes:
+      - directus_uploads:/directus/uploads
+      - directus_extensions:/directus/extensions
+    environment:
+      # Database
+      DB_CLIENT: 'pg'
+      DB_HOST: 'postgres'
+      DB_PORT: '5432'
+      DB_DATABASE: 'directus'
+      DB_USER: 'directus'
+      DB_PASSWORD: 'directus'
+
+      # Security
+      KEY: '255d861b-5ea1-5996-9aa3-922530ec40b1'
+      SECRET: '6116487b-cda1-52c2-b5b5-c8022c45e263'
+
+      # Admin user
+      ADMIN_EMAIL: 'admin@example.com'
+      ADMIN_PASSWORD: 'admin123'
+
+      # General
+      PUBLIC_URL: 'http://localhost:8055'
+      CORS_ENABLED: 'true'
+      CORS_ORIGIN: '*'
+
+      # Rate limiting (disable for testing)
+      RATE_LIMITER_ENABLED: 'false'
+
+      # Cache
+      CACHE_ENABLED: 'false'
+
+      # Email (disabled for testing)
+      EMAIL_FROM: 'no-reply@example.com'
+      EMAIL_TRANSPORT: 'sendmail'
+
+      # Logging
+      LOG_LEVEL: 'info'
+      LOG_STYLE: 'pretty'
+
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"require('http').get('http://localhost:8055/server/health', (r) => process.exit(r.statusCode === 200 ? 0 : 1))\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 40s
+
+volumes:
+  postgres_data:
+  directus_uploads:
+  directus_extensions:
+
+networks:
+  default:
+    name: directus-network

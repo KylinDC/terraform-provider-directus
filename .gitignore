@@ -1,0 +1,76 @@
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Code coverage profiles and other test artifacts
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+coverage.html
+coverage.txt
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Editor/IDE
+.idea/
+.vscode/
+.cursor/
+.agents/
+.claude/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+dist-artifacts/
+terraform-provider-directus
+terraform-provider-directus_*
+
+# Terraform files
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+test-e2e*/
+
+# Release artifacts
+*.zip
+*_SHA256SUMS
+*_SHA256SUMS.sig
+
+# Logs and temporary files
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+
+# Docker volumes
+.docker/
+
+# Reference directory (moved from internal/models)
+# Uncomment if you want to ignore reference models
+# reference/
